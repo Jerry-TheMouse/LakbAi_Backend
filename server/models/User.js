@@ -10,15 +10,15 @@ const userSchema = new mongoose.Schema({
     type: String, 
     enum: ['Luzon', 'Visayas', 'Mindanao', null] 
   },
-  contactNumber: { type: String }, // NEW: Added contact number field
+  contactNumber: { type: String },
+  tawiTawiId: { type: String, sparse: true, unique: true }, 
   createdAt: { type: Date, default: Date.now }
 });
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+userSchema.pre('save', async function() {
+  if (!this.isModified('password')) return;
   this.password = await bcrypt.hash(this.password, 10);
-  next();
 });
 
 // Method to compare password

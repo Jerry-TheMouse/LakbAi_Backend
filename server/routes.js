@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { User } from './models/User.js';
 import { Destination, Itinerary } from './models/Data.js';
 import { GoogleGenAI } from "@google/genai";
+import crypto from 'crypto'; // Import crypto for generating random passwords
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
@@ -24,6 +25,93 @@ const authenticate = async (req, res, next) => {
     res.status(401).json({ message: 'Invalid token' });
   }
 };
+
+// ==========================================
+// INTERNAL B2B HANDSHAKE ROUTES
+// ==========================================
+
+// Middleware for validating internal gateway requests
+const internalAuth = (req, res, next) => {
+  const gatewaySecret = req.headers['x-internal-gateway-secret'];
+  const expectedSecret = process.env.GATEWAY_INTERNAL_SECRET;
+  console.info("[INFO] Handshake Debug:", { received: gatewaySecret, expected: expectedSecret });
+  if (!gatewaySecret || gatewaySecret !== expectedSecret) {
+    console.warn("[WARN] Unauthorized internal handshake attempt detected");
+    return res.status(401).json({ success: false, message: 'Unauthorized internal access.' });
+  }
+
+  next();
+};
+
+router.post('/internal/verify-user', internalAuth, async (req, res) => {
+  try {
+    const { tawiTawiUserId, email } = req.body;
+    
+    // Step 1: Check if the user is already linked via tawiTawiId
+    let user = await User.findOne({ tawiTawiId: tawiTawiUserId });
+
+    if (!user) {
+      // Step 2: Fallback check by email to prevent duplicate accounts
+      user = await User.findOne({ email });
+      
+      if (user) {
+        // Link the existing account to the Tawi-Tawi Super App ID
+        user.tawiTawiId = tawiTawiUserId;
+        await user.save();
+      } else {
+        // Step 3: User does NOT exist. Tell the Gateway registration is required.
+        return res.status(200).json({
+          success: true,
+          isLinked: false,
+          requiresRegistration: true, // New flag for the UI
+          message: "User not found. Explicit registration required."
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      isLinked: true,
+      requiresRegistration: false,
+      externalUserId: user._id.toString(),
+      message: "Handshake verified. Access granted."
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Internal server error." });
+  }
+});
+
+// NEW ROUTE: Handle the explicit registration from the UI
+router.post('/internal/register-user', internalAuth, async (req, res) => {
+  try {
+    // We expect the gateway to send the standard data PLUS the extra fields (contactNumber, region)
+    const { tawiTawiUserId, email, fullName, contactNumber, region } = req.body;
+    
+    // Generate the required random password for the local schema
+    const randomPassword = crypto.randomBytes(16).toString('hex');
+    
+    const user = new User({
+      name: fullName,
+      email: email,
+      password: randomPassword,
+      role: 'tourist',
+      tawiTawiId: tawiTawiUserId,
+      contactNumber: contactNumber || null,
+      region: region || null
+    });
+    
+    await user.save();
+    
+    return res.status(201).json({
+      success: true,
+      isLinked: true,
+      externalUserId: user._id.toString(),
+      message: "Service account created and linked successfully."
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to create service account." });
+  }
+});
 
 // ==========================================
 // AUTH ROUTES
