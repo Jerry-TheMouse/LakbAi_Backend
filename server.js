@@ -1,7 +1,6 @@
 import 'dotenv/config'; // This MUST be the very first line!
 import express from "express";
-import cors from "cors"; // <-- 1. ADDED CORS IMPORT
-import { createServer as createViteServer } from "vite";
+import cors from "cors"; 
 import path from "path";
 import { fileURLToPath } from "url";
 import apiRoutes from './server/routes.js';
@@ -20,42 +19,29 @@ async function startServer() {
   // Connect to MongoDB
   await connectDB();
 
-  // <-- 2. ADDED CORS MIDDLEWARE HERE BEFORE express.json()
+  // CORS Middleware
   app.use(cors());
 
   // Middleware to parse incoming JSON payloads
   app.use(express.json({ limit: '10mb' }));
 
   // API Routes
-  // This automatically prefixes all endpoints in routes.js with '/api'
   app.use("/api", apiRoutes);
 
-  // Vite middleware for development vs static files for production
-  const isProd = process.env.NODE_ENV === "production";
-  
-  if (!isProd) {
-    console.log("Development mode: Initializing Vite middleware...");
-    const vite = await createViteServer({
-      server: { 
-        middlewareMode: true,
-        host: '0.0.0.0',
-        port: PORT
-      },
-      appType: "spa",
+  // Health check route for Render (replaces the old Vite/static file logic)
+  app.get("/", (req, res) => {
+    res.status(200).json({ 
+      status: "success", 
+      message: "LakbAi Backend API is running successfully." 
     });
-    app.use(vite.middlewares);
-  } else {
-    console.log("Production mode: Serving static files...");
-    const distPath = path.join(process.cwd(), "dist");
-    
-    // Serve static assets
-    app.use(express.static(distPath));
-    
-    // Catch-all route to serve index.html for Single Page Application (SPA) routing
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+  });
+
+  // Catch-all route to handle 404s gracefully
+  app.get("*", (req, res) => {
+    res.status(404).json({ 
+      error: "Route not found. Please use the /api endpoints." 
     });
-  }
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`LakbAi Server running on http://0.0.0.0:${PORT}`);
