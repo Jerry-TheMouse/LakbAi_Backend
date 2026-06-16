@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { User } from './models/User.js';
 import { Destination, Itinerary } from './models/Data.js';
 import { GoogleGenAI } from "@google/genai";
-import crypto from 'crypto'; // Import crypto for generating random passwords
+import crypto from 'crypto'; 
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
@@ -30,10 +30,11 @@ const authenticate = async (req, res, next) => {
 // INTERNAL B2B HANDSHAKE ROUTES
 // ==========================================
 
-// Middleware for validating internal gateway requests
 const internalAuth = (req, res, next) => {
   const gatewaySecret = req.headers['x-internal-gateway-secret'];
-  const expectedSecret = process.env.GATEWAY_INTERNAL_SECRET;
+  // ✅ Added fallback secret to guarantee it matches Flutter's lakbai_config.dart
+  const expectedSecret = process.env.GATEWAY_INTERNAL_SECRET || 'tawi-tawi-super-app-secret-2024';
+  
   console.info("[INFO] Handshake Debug:", { received: gatewaySecret, expected: expectedSecret });
   if (!gatewaySecret || gatewaySecret !== expectedSecret) {
     console.warn("[WARN] Unauthorized internal handshake attempt detected");
@@ -47,33 +48,40 @@ router.post('/internal/verify-user', internalAuth, async (req, res) => {
   try {
     const { tawiTawiUserId, email } = req.body;
     
-    // Step 1: Check if the user is already linked via tawiTawiId
     let user = await User.findOne({ tawiTawiId: tawiTawiUserId });
 
     if (!user) {
-      // Step 2: Fallback check by email to prevent duplicate accounts
       user = await User.findOne({ email });
-      
       if (user) {
-        // Link the existing account to the Tawi-Tawi Super App ID
         user.tawiTawiId = tawiTawiUserId;
         await user.save();
       } else {
-        // Step 3: User does NOT exist. Tell the Gateway registration is required.
         return res.status(200).json({
           success: true,
           isLinked: false,
-          requiresRegistration: true, // New flag for the UI
+          requiresRegistration: true,
           message: "User not found. Explicit registration required."
         });
       }
     }
+
+    // ✅ FIX: Actually generate the JWT token and return it so Flutter can log in!
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
 
     return res.status(200).json({
       success: true,
       isLinked: true,
       requiresRegistration: false,
       externalUserId: user._id.toString(),
+      token: token, // <--- FLUTTER NEEDS THIS TO LOG IN!
+      user: {       // <--- FLUTTER NEEDS THIS TO SHOW PROFILE DATA!
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        region: user.region,
+        contactNumber: user.contactNumber
+      },
       message: "Handshake verified. Access granted."
     });
   } catch (err) {
@@ -81,13 +89,9 @@ router.post('/internal/verify-user', internalAuth, async (req, res) => {
   }
 });
 
-// NEW ROUTE: Handle the explicit registration from the UI
 router.post('/internal/register-user', internalAuth, async (req, res) => {
   try {
-    // We expect the gateway to send the standard data PLUS the extra fields (contactNumber, region)
     const { tawiTawiUserId, email, fullName, contactNumber, region } = req.body;
-    
-    // Generate the required random password for the local schema
     const randomPassword = crypto.randomBytes(16).toString('hex');
     
     const user = new User({
@@ -102,10 +106,22 @@ router.post('/internal/register-user', internalAuth, async (req, res) => {
     
     await user.save();
     
+    // ✅ FIX: Generate and return the JWT token for brand new users
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
+
     return res.status(201).json({
       success: true,
       isLinked: true,
       externalUserId: user._id.toString(),
+      token: token, // <--- FLUTTER NEEDS THIS TO LOG IN!
+      user: {       // <--- FLUTTER NEEDS THIS TO SHOW PROFILE DATA!
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        region: user.region,
+        contactNumber: user.contactNumber
+      },
       message: "Service account created and linked successfully."
     });
   } catch (err) {
@@ -241,16 +257,14 @@ router.post('/destinations/:id/rate', authenticate, async (req, res) => {
     
     if (!dest) return res.status(404).json({ message: 'Destination not found' });
 
-    // Failsafe: Ensure the ratings array exists
     if (!dest.ratings) dest.ratings = [];
 
-    // Check if this user already rated
     const existingRatingIndex = dest.ratings.findIndex(r => r.userId === req.user._id.toString());
     
     if (existingRatingIndex >= 0) {
-      dest.ratings[existingRatingIndex].value = rating; // Update existing
+      dest.ratings[existingRatingIndex].value = rating; 
     } else {
-      dest.ratings.push({ userId: req.user._id.toString(), value: rating }); // Add new
+      dest.ratings.push({ userId: req.user._id.toString(), value: rating }); 
     }
     
     await dest.save();
